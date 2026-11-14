@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "matthewjaybarr.displays",
+  "name": "Displays",
+  "version": "0.1.0",
+  "author": "Matt Barr",
+  "description": "Brightness, display on/off and per-monitor scale for every connected monitor",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Displays",
+    "description": "Brightness, display on/off and per-monitor scale for every connected monitor",
+    "category": "System",
+    "allowMultiple": false
+  },
+  "omarchy": {
+    "forkedFrom": "omarchy.monitor"
+  }
+}
