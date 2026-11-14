@@ -25,14 +25,29 @@ Panel {
   // Monitor the SCALE row acts on; empty = follow the focused one. Click the name to cycle.
   property string targetMonitor: ""
   property var monitorInfo: ({})
-  // Swap a display with its neighbour in the left-to-right order (list order = screen order).
-  function moveDisplay(name, delta) {
-    var order = displays.filter(function(d) { return d && d.enabled }).map(function(d) { return d.name })
-    var i = order.indexOf(name), j = i + delta
-    if (i < 0 || j < 0 || j >= order.length) return
-    order[i] = order[j]; order[j] = name
-    actionProc.command = [Qt.resolvedUrl("set-scale.sh").toString().replace("file://", ""), "--order"].concat(order)
+  // Layout items in list order: ["DP-3", "eDP-2", "^HDMI-A-1"]; "^" = stacked above the one before.
+  function layoutItems(list) {
+    return list.filter(function(d) { return d && d.enabled }).map(function(d) { return (d.stacked ? "^" : "") + d.name })
+  }
+  function applyLayout(flags, list) {
+    actionProc.command = [Qt.resolvedUrl("layout.py").toString().replace("file://", "")].concat(flags, layoutItems(list))
     if (!actionProc.running) actionProc.running = true
+  }
+  // Swap a display with its neighbour in the list (list order = screen order, top = left).
+  function moveDisplay(name, delta) {
+    var list = displays.filter(function(d) { return d && d.enabled }).map(function(d) { return Object.assign({}, d) })
+    var i = list.findIndex(function(d) { return d.name === name }), j = i + delta
+    if (i < 0 || j < 0 || j >= list.length) return
+    var t = list[i]; list[i] = list[j]; list[j] = t
+    list[0].stacked = false
+    applyLayout([], list)
+  }
+  function toggleStacked(name) {
+    applyLayout([], displays.map(function(d) { return d.name === name ? Object.assign({}, d, { stacked: !d.stacked }) : d }))
+  }
+  function toggleRotation(name) {
+    var info = monitorInfo[name] || {}
+    applyLayout(["--transform", name, info.transform % 2 ? "0" : "1"], displays)
   }
   function targetName() {
     for (var i = 0; i < displays.length; i++)
@@ -316,13 +331,28 @@ Panel {
 
   function updateDisplays(displaysJson) {
     var parsed = Model.parseDisplays(displaysJson)
-    // List order = left-to-right screen order; disabled displays go last.
+    // List order = screen order: columns left to right, and within a column bottom first,
+    // so a monitor sitting above the previous row is marked stacked. Disabled ones go last.
     var info = root.monitorInfo
-    root.displays = parsed.displays.slice().sort(function(a, b) {
-      var ax = a.enabled && info[a.name] ? info[a.name].x : 1e9
-      var bx = b.enabled && info[b.name] ? info[b.name].x : 1e9
-      return ax - bx
+    function box(d) {
+      var m = info[d.name]
+      if (!d.enabled || !m) return null
+      var w = Math.round(m.width / m.scale), h = Math.round(m.height / m.scale)
+      return m.transform % 2 ? { x: m.x, y: m.y, w: h, h: w } : { x: m.x, y: m.y, w: w, h: h }
+    }
+    var on = parsed.displays.filter(box).sort(function(a, b) { return box(a).x - box(b).x })
+    var columns = []
+    on.forEach(function(d) {
+      var b = box(d), col = columns[columns.length - 1]
+      if (col && b.x < col.right) { col.items.push(d); col.right = Math.max(col.right, b.x + b.w) }
+      else columns.push({ right: b.x + b.w, items: [d] })
     })
+    var ordered = []
+    columns.forEach(function(col) {
+      col.items.sort(function(a, b) { return box(b).y - box(a).y })
+      col.items.forEach(function(d, i) { ordered.push(Object.assign({}, d, { stacked: i > 0 })) })
+    })
+    root.displays = ordered.concat(parsed.displays.filter(function(d) { return !box(d) }))
     root.enabledDisplayCount = parsed.enabledDisplayCount
   }
 
@@ -345,8 +375,7 @@ Panel {
   function setScale(scale) {
     var name = targetName()
     if (!name) return
-    actionProc.command = [Qt.resolvedUrl("set-scale.sh").toString().replace("file://", ""), name, effectiveScale(scale)]
-    if (!actionProc.running) actionProc.running = true
+    applyLayout(["--scale", name, effectiveScale(scale)], displays)
   }
 
   // ---- Text size (shell base font + GTK text-scaling, via one CLI) ----
@@ -425,7 +454,7 @@ Panel {
 
   Process {
     id: stateProc
-    command: ["bash", "-c", "omarchy-monitor-state; hyprctl monitors -j | jq -c 'map({key: .name, value: {scale, x}}) | from_entries'"]
+    command: ["bash", "-c", "omarchy-monitor-state; hyprctl monitors -j | jq -c 'map({key: .name, value: {scale, x, y, width, height, transform}}) | from_entries'"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -913,7 +942,7 @@ Panel {
     readonly property bool isFocused: display && display.focused
     readonly property bool canToggle: display && (!display.enabled || root.enabledDisplayCount > 1)
     readonly property bool canMove: display && display.enabled && root.enabledDisplayCount > 1
-    readonly property real arrowsWidth: Style.space(52)
+    readonly property real arrowsWidth: Style.space(104)
 
     hasCursor: root.cursorActive && root.focusSection === "monitors" && root.selectedIndex === rowIndex
     onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(monitorRow)
@@ -991,20 +1020,30 @@ Panel {
       width: monitorRow.arrowsWidth
 
       Repeater {
-        model: [{ glyph: "󰁝", delta: -1, tip: "Move left" }, { glyph: "󰁅", delta: 1, tip: "Move right" }]
+        model: [
+          { glyph: "󰁝", act: "left", tip: "Move left" },
+          { glyph: "󰁅", act: "right", tip: "Move right" },
+          { glyph: "⤒", act: "stack", tip: "Stack above the display before it" },
+          { glyph: "rotate", act: "rotate", tip: "Portrait / landscape" }
+        ]
 
         Text {
           required property var modelData
           required property int index
-          readonly property bool usable: modelData.delta < 0
+          readonly property bool portrait: (root.monitorInfo[monitorRow.display.name] || {}).transform % 2 === 1
+          readonly property bool usable: modelData.act === "left" || modelData.act === "stack"
             ? monitorRow.rowIndex > 0
-            : monitorRow.rowIndex < root.enabledDisplayCount - 1
-          text: modelData.glyph
+            : modelData.act === "right" ? monitorRow.rowIndex < root.enabledDisplayCount - 1 : true
+          // Toggles (stack, rotate) show their state: bright when on.
+          readonly property bool on: modelData.act === "stack" ? !!monitorRow.display.stacked
+            : modelData.act === "rotate" ? portrait : false
+          text: modelData.act === "rotate" ? (portrait ? "▯" : "▭") : modelData.glyph
           color: root.bar.foreground
-          opacity: usable ? (arrowArea.containsMouse ? 1.0 : 0.6) : 0.15
+          opacity: !usable ? 0.15 : (on || arrowArea.containsMouse) ? 1.0 : 0.6
+          font.bold: on
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.subtitle
-          width: monitorRow.arrowsWidth / 2
+          width: monitorRow.arrowsWidth / 4
           horizontalAlignment: Text.AlignHCenter
           Accessible.name: modelData.tip
 
@@ -1015,7 +1054,13 @@ Panel {
             hoverEnabled: true
             enabled: parent.usable
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.moveDisplay(monitorRow.display.name, parent.modelData.delta)
+            onClicked: {
+              var n = monitorRow.display.name, act = parent.modelData.act
+              if (act === "left") root.moveDisplay(n, -1)
+              else if (act === "right") root.moveDisplay(n, 1)
+              else if (act === "stack") root.toggleStacked(n)
+              else root.toggleRotation(n)
+            }
           }
         }
       }

@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "id": "matthewjaybarr.displays",
   "name": "Displays",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "Matt Barr",
-  "description": "Brightness, display on/off, per-monitor scale and left-to-right arrangement for every connected monitor",
+  "description": "Brightness, display on/off, per-monitor scale, arrangement, stacking and rotation for every connected monitor",
   "kinds": [
     "bar-widget"
   ],
@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "Displays",
-    "description": "Brightness, display on/off, per-monitor scale and left-to-right arrangement for every connected monitor",
+    "description": "Brightness, display on/off, per-monitor scale, arrangement, stacking and rotation for every connected monitor",
     "category": "System",
     "allowMultiple": false
   },
