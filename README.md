@@ -1,6 +1,7 @@
 # Displays
 
-The stock Omarchy **Display** panel, made to work with every monitor you have plugged in.
+The stock Omarchy **Display** panel, made for multi-monitor setups: it works with every
+monitor you have plugged in.
 
 **It stays simple on purpose.** Same look, same place on the bar, same brightness and
 text-size controls. No new windows, no settings page, no layout canvas to drag around, no

@@ -4,7 +4,7 @@
   "name": "Displays",
   "version": "0.3.1",
   "author": "Matt Barr",
-  "description": "The stock Display panel, kept simple, for every monitor: per-monitor scale, arrange, stack and rotate in the same small panel. No new UI, no dependencies.",
+  "description": "The stock Display panel, kept simple, for multi-monitor setups: per-monitor scale, arrange, stack and rotate in the same small panel. No new UI, no dependencies.",
   "kinds": [
     "bar-widget"
   ],
