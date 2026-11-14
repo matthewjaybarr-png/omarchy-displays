@@ -577,7 +577,7 @@ Panel {
               spacing: Style.space(2)
 
               Text {
-                text: Commons.I18n.t("monitor.display")
+                text: "Displays"
                 textFormat: Text.PlainText
                 color: root.bar.foreground
                 font.family: root.bar.fontFamily
