@@ -24,7 +24,16 @@ Panel {
   property string focusedMonitor: ""
   // Monitor the SCALE row acts on; empty = follow the focused one. Click the name to cycle.
   property string targetMonitor: ""
-  property var monitorScales: ({})
+  property var monitorInfo: ({})
+  // Swap a display with its neighbour in the left-to-right order (list order = screen order).
+  function moveDisplay(name, delta) {
+    var order = displays.filter(function(d) { return d && d.enabled }).map(function(d) { return d.name })
+    var i = order.indexOf(name), j = i + delta
+    if (i < 0 || j < 0 || j >= order.length) return
+    order[i] = order[j]; order[j] = name
+    actionProc.command = [Qt.resolvedUrl("set-scale.sh").toString().replace("file://", ""), "--order"].concat(order)
+    if (!actionProc.running) actionProc.running = true
+  }
   function targetName() {
     for (var i = 0; i < displays.length; i++)
       if (displays[i] && displays[i].enabled && displays[i].name === targetMonitor) return targetMonitor
@@ -284,7 +293,7 @@ Panel {
     for (var i = 0; i < displays.length; i++) {
       var display = displays[i]
       if (display && display.name === root.targetName())
-        return Model.matchingScaleIndex(scaleValues, monitorScales[display.name], display.width, display.height)
+        return Model.matchingScaleIndex(scaleValues, (monitorInfo[display.name] || {}).scale, display.width, display.height)
     }
     return -1
   }
@@ -307,7 +316,13 @@ Panel {
 
   function updateDisplays(displaysJson) {
     var parsed = Model.parseDisplays(displaysJson)
-    root.displays = parsed.displays
+    // List order = left-to-right screen order; disabled displays go last.
+    var info = root.monitorInfo
+    root.displays = parsed.displays.slice().sort(function(a, b) {
+      var ax = a.enabled && info[a.name] ? info[a.name].x : 1e9
+      var bx = b.enabled && info[b.name] ? info[b.name].x : 1e9
+      return ax - bx
+    })
     root.enabledDisplayCount = parsed.enabledDisplayCount
   }
 
@@ -410,7 +425,7 @@ Panel {
 
   Process {
     id: stateProc
-    command: ["bash", "-c", "omarchy-monitor-state; hyprctl monitors -j | jq -c 'map({key: .name, value: .scale}) | from_entries'"]
+    command: ["bash", "-c", "omarchy-monitor-state; hyprctl monitors -j | jq -c 'map({key: .name, value: {scale, x}}) | from_entries'"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -424,8 +439,8 @@ Panel {
         root.mirrorEnabled = String(lines[4] || "").trim() === root.externalMonitor && root.externalMonitor !== ""
         root.focusedMonitor = String(lines[5] || "").trim()
         root.monitorScale = root.normalizeScale(String(lines[6] || "").trim())
+        try { root.monitorInfo = JSON.parse(String(lines[8] || "{}")) } catch (e) { root.monitorInfo = {} }
         root.updateDisplays(String(lines[7] || "[]").trim())
-        try { root.monitorScales = JSON.parse(String(lines[8] || "{}")) } catch (e) { root.monitorScales = {} }
       }
     }
   }
@@ -897,6 +912,8 @@ Panel {
 
     readonly property bool isFocused: display && display.focused
     readonly property bool canToggle: display && (!display.enabled || root.enabledDisplayCount > 1)
+    readonly property bool canMove: display && display.enabled && root.enabledDisplayCount > 1
+    readonly property real arrowsWidth: Style.space(52)
 
     hasCursor: root.cursorActive && root.focusSection === "monitors" && root.selectedIndex === rowIndex
     onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(monitorRow)
@@ -935,9 +952,12 @@ Panel {
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.body
         elide: Text.ElideRight
-        width: parent.width - Style.space(22) - Style.space(14) - Style.space(16)
+        width: parent.width - Style.space(22) - Style.space(14) - Style.space(16) - monitorRow.arrowsWidth
         anchors.verticalCenter: parent.verticalCenter
       }
+
+      // Room for the move arrows, which overlay this spot (they need their own clicks).
+      Item { width: monitorRow.arrowsWidth - Style.space(8); height: 1 }
 
       Text {
         textFormat: Text.PlainText
@@ -961,6 +981,44 @@ Panel {
         root.selectedIndex = monitorRow.rowIndex
       }
       onClicked: if (monitorRow.canToggle) root.toggleDisplay(monitorRow.display.name, monitorRow.display.enabled)
+    }
+
+    Row {
+      visible: monitorRow.canMove
+      anchors.right: parent.right
+      anchors.rightMargin: Style.space(6) + Style.space(14) + Style.space(8)
+      anchors.verticalCenter: parent.verticalCenter
+      width: monitorRow.arrowsWidth
+
+      Repeater {
+        model: [{ glyph: "󰁝", delta: -1, tip: "Move left" }, { glyph: "󰁅", delta: 1, tip: "Move right" }]
+
+        Text {
+          required property var modelData
+          required property int index
+          readonly property bool usable: modelData.delta < 0
+            ? monitorRow.rowIndex > 0
+            : monitorRow.rowIndex < root.enabledDisplayCount - 1
+          text: modelData.glyph
+          color: root.bar.foreground
+          opacity: usable ? (arrowArea.containsMouse ? 1.0 : 0.6) : 0.15
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.subtitle
+          width: monitorRow.arrowsWidth / 2
+          horizontalAlignment: Text.AlignHCenter
+          Accessible.name: modelData.tip
+
+          MouseArea {
+            id: arrowArea
+            anchors.fill: parent
+            anchors.margins: -Style.space(4)
+            hoverEnabled: true
+            enabled: parent.usable
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.moveDisplay(monitorRow.display.name, parent.modelData.delta)
+          }
+        }
+      }
     }
   }
 }

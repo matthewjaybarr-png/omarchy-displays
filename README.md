@@ -2,13 +2,15 @@
 
 An Omarchy bar widget forked from the stock **Display** panel (`omarchy.monitor`).
 
-The stock panel only scales the monitor under the mouse. This one scales any of them:
+The stock panel only scales the monitor under the mouse. This one scales and arranges any of them:
 
 - Click the monitor name next to **SCALE** (⇄) to pick which monitor the buttons act on.
 - Picking a scale writes it into `~/.config/hypr/monitors.lua` and re-lines the monitors up
   left-to-right, so nothing overlaps (`set-scale.sh`). The previous file is kept as
   `monitors.lua.bak-panel`.
 - Includes a 1.33× preset for 1080p screens.
+- The **Displays** list is in screen order: top = leftmost. Use ↑/↓ on a row to move that
+  monitor left/right; the new order is saved to `monitors.lua` the same way.
 
 Brightness still follows the focused monitor, same as stock.
 
