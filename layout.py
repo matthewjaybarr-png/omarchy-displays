@@ -64,9 +64,14 @@ def main(argv):
 
     lua = os.path.realpath(os.path.expanduser("~/.config/hypr/monitors.lua"))
     text = open(lua).read()
-    for n in {n for n, _ in items} | set(edits):
-        if not rule_re(n).search(text):
-            sys.exit(f"no one-line rule for {n} in monitors.lua")
+    live = {m["name"]: m for m in json.loads(subprocess.check_output(["hyprctl", "monitors", "-j"], timeout=5))}
+    # A stock monitors.lua only has the catch-all rule: give each monitor we touch its own line.
+    for n in sorted({n for n, _ in items} | set(edits)):
+        if rule_re(n).search(text):
+            continue
+        if n not in live:
+            sys.exit(f"{n} has no rule in monitors.lua and is not connected")
+        text = text.rstrip("\n") + f'\nhl.monitor({{ output = "{n}", mode = "preferred", position = "auto", scale = {round(live[n]["scale"], 6)} }})\n'
 
     def set_key(line, key, val):
         if re.search(rf"\b{key} = ", line):
@@ -76,7 +81,6 @@ def main(argv):
     for n, kv in edits.items():
         text = rule_re(n).sub(lambda m: _apply(m.group(0), kv, set_key), text, count=1)
 
-    live = {m["name"]: m for m in json.loads(subprocess.check_output(["hyprctl", "monitors", "-j"]))}
     geom = {}
     for n, _ in items:
         if n not in live:
@@ -96,7 +100,7 @@ def main(argv):
         f.write(text)
     shutil.copymode(lua, tmp)
     os.replace(tmp, lua)
-    subprocess.run(["hyprctl", "reload"], stdout=subprocess.DEVNULL)
+    subprocess.run(["hyprctl", "reload"], stdout=subprocess.DEVNULL, timeout=5)
 
 
 def _apply(line, kv, set_key):

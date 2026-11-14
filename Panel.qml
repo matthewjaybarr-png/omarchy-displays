@@ -29,9 +29,15 @@ Panel {
   function layoutItems(list) {
     return list.filter(function(d) { return d && d.enabled }).map(function(d) { return (d.stacked ? "^" : "") + d.name })
   }
+  function runAction(cmd) {
+    // One action at a time: a click while one is still running is ignored, never retargeted.
+    if (actionProc.running) return
+    actionProc.command = cmd
+    actionProc.running = true
+  }
   function applyLayout(flags, list) {
-    actionProc.command = [Qt.resolvedUrl("layout.py").toString().replace("file://", "")].concat(flags, layoutItems(list))
-    if (!actionProc.running) actionProc.running = true
+    var script = decodeURIComponent(Qt.resolvedUrl("layout.py").toString().replace(/^file:\/\//, ""))
+    runAction(["timeout", "-k", "1", "10", script].concat(flags, layoutItems(list)))
   }
   // Swap a display with its neighbour in the list (list order = screen order, top = left).
   function moveDisplay(name, delta) {
@@ -283,7 +289,7 @@ Panel {
     }
 
     root.brightnessSetQueued = false
-    setBrightnessProc.command = ["omarchy-brightness-display", "--no-osd", "--monitor", root.focusedMonitor, percent + "%"]
+    setBrightnessProc.command = ["timeout", "-k", "1", "5", "omarchy-brightness-display", "--no-osd", "--monitor", root.focusedMonitor, percent + "%"]
     setBrightnessProc.running = true
   }
 
@@ -368,8 +374,7 @@ Panel {
     var expr = enabled
       ? 'hl.monitor({ output = ' + output + ', disabled = true })'
       : 'hl.monitor({ output = ' + output + ', disabled = false })'
-    actionProc.command = ["hyprctl", "eval", expr]
-    if (!actionProc.running) actionProc.running = true
+    runAction(["timeout", "-k", "1", "5", "hyprctl", "eval", expr])
   }
 
   function setScale(scale) {
@@ -402,8 +407,9 @@ Panel {
   }
 
   function setTextSize(px) {
-    textScaleProc.command = ["omarchy-display-text-size", String(px)]
-    if (!textScaleProc.running) textScaleProc.running = true
+    if (textScaleProc.running) return
+    textScaleProc.command = ["timeout", "-k", "1", "5", "omarchy-display-text-size", String(px)]
+    textScaleProc.running = true
   }
 
   function adjustTextSize(deltaSteps) {
@@ -454,11 +460,14 @@ Panel {
 
   Process {
     id: stateProc
-    command: ["bash", "-c", "omarchy-monitor-state; hyprctl monitors -j | jq -c 'map({key: .name, value: {scale, x, y, width, height, transform}}) | from_entries'"]
+    // Bounded and all-or-nothing: on any failure or timeout it prints nothing and the panel
+    // keeps its previous state.
+    command: ["bash", "-c", "set -o pipefail; s=$(timeout -k 1 5 omarchy-monitor-state) && j=$(timeout -k 1 5 hyprctl monitors -j | jq -c 'map({key: .name, value: {scale, x, y, width, height, transform}}) | from_entries') && printf '%s\\n%s\\n' \"$s\" \"$j\" | head -c 65536"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         var lines = String(text || "").split("\n")
+        if (lines.length < 9) return
         var brightness = String(lines[0] || "").trim()
         root.brightnessAvailable = brightness !== "unavailable" && brightness !== ""
         root.brightnessPercent = root.brightnessAvailable ? Math.max(0, Math.min(100, parseInt(brightness, 10))) : 0
@@ -963,6 +972,7 @@ Panel {
       spacing: Style.space(8)
 
       Text {
+        textFormat: Text.PlainText
         text: "󰍹"
         color: root.bar.foreground
         font.family: root.bar.fontFamily
@@ -1037,6 +1047,7 @@ Panel {
           // Toggles (stack, rotate) show their state: bright when on.
           readonly property bool on: modelData.act === "stack" ? !!monitorRow.display.stacked
             : modelData.act === "rotate" ? portrait : false
+          textFormat: Text.PlainText
           text: modelData.act === "rotate" ? (portrait ? "▯" : "▭") : modelData.glyph
           color: root.bar.foreground
           opacity: !usable ? 0.15 : (on || arrowArea.containsMouse) ? 1.0 : 0.6

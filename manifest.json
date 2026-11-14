@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "id": "matthewjaybarr.displays",
   "name": "Displays",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": "Matt Barr",
-  "description": "Brightness, display on/off, per-monitor scale, arrangement, stacking and rotation for every connected monitor",
+  "description": "The stock Display panel, kept simple, for every monitor: per-monitor scale, arrange, stack and rotate in the same small panel. No new UI, no dependencies.",
   "kinds": [
     "bar-widget"
   ],
@@ -19,5 +19,6 @@
   },
   "omarchy": {
     "forkedFrom": "omarchy.monitor"
-  }
+  },
+  "homepage": "https://github.com/matthewjaybarr-png/omarchy-displays"
 }
