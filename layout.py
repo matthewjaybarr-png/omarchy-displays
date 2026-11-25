@@ -12,7 +12,20 @@ NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def rule_re(name):
-    return re.compile(r'^hl\.monitor\(\{ output = "' + re.escape(name) + r'",.*$', re.M)
+    # [ \t] not \s, so a match never runs onto the next line.
+    q = re.escape(name)
+    return re.compile(r'^[ \t]*hl\.monitor\(\{[ \t]*output[ \t]*=[ \t]*(["\'])' + q + r'\1[ \t]*,.*$', re.M)
+
+
+def set_key(line, key, val):
+    if re.search(rf"\b{key}[ \t]*=", line):
+        return re.sub(rf"\b{key}[ \t]*=[ \t]*[^,}}\s]+", f"{key} = {val}", line, count=1)
+    return re.sub(r"[ \t]*\}\)", f", {key} = {val} }})", line, count=1)
+
+
+def num(line, key):
+    m = re.search(rf"\b{key}[ \t]*=[ \t]*([0-9.]+)", line)
+    return float(m.group(1)) if m else None
 
 
 def plan(items, geom):
@@ -45,6 +58,15 @@ def self_test():
     # R above M: M's column is 1600 wide, R centred over it, everything shifted down by R's height
     assert plan([("L", 0), ("M", 0), ("R", 1)], g) == {"L": (0, 810), "M": (1440, 810), "R": (1520, 0)}
     assert plan([("^X", 1)], g) == {}
+    text = ('hl.monitor({ output = "", scale = omarchy_monitor_scale })\n'
+            "  hl.monitor({output='DP-1',mode=\"preferred\"}) -- desk\n"
+            '-- hl.monitor({ output = "DP-2", scale = 1 })\n'
+            'hl.monitor({ output = "DP-3",\n  scale = 2 })\n')
+    assert rule_re("DP-1").search(text) and not rule_re("DP-2").search(text) and not rule_re("DP-").search(text)
+    line = rule_re("DP-1").search(text).group(0)
+    assert num(line, "scale") is None
+    assert set_key(set_key(line, "scale", "1.5"), "scale", "2") == "  hl.monitor({output='DP-1',mode=\"preferred\", scale = 2 }) -- desk"
+    assert "})" not in rule_re("DP-3").search(text).group(0)  # multi-line: refused in main
     print("self-test ok")
 
 
@@ -73,23 +95,26 @@ def main(argv):
             sys.exit(f"{n} has no rule in monitors.lua and is not connected")
         text = text.rstrip("\n") + f'\nhl.monitor({{ output = "{n}", mode = "preferred", position = "auto", scale = {round(live[n]["scale"], 6)} }})\n'
 
-    def set_key(line, key, val):
-        if re.search(rf"\b{key} = ", line):
-            return re.sub(rf"\b{key} = [^,}}\s]+", f"{key} = {val}", line)
-        return re.sub(r" \}\)", f", {key} = {val} }})", line, count=1)
+    for n in {n for n, _ in items} | set(edits):
+        m = rule_re(n).search(text)
+        if m and "})" not in m.group(0):
+            sys.exit(f"{n}'s rule in monitors.lua spans several lines; put it on one line")
 
     for n, kv in edits.items():
-        text = rule_re(n).sub(lambda m: _apply(m.group(0), kv, set_key), text, count=1)
+        text = rule_re(n).sub(lambda m: _apply(m.group(0), kv), text, count=1)
 
     geom = {}
     for n, _ in items:
         if n not in live:
             continue
         line = rule_re(n).search(text).group(0)
-        scale = float(re.search(r"\bscale = ([0-9.]+)", line).group(1))
-        t = re.search(r"\btransform = ([0-9]+)", line)
+        # scale may be a Lua variable or missing: then Hyprland's live value is the one in use.
+        scale = num(line, "scale") or live[n]["scale"]
+        t = num(line, "transform")
+        if t is None:
+            t = live[n]["transform"]
         w, h = round(live[n]["width"] / scale), round(live[n]["height"] / scale)
-        geom[n] = (h, w) if t and int(t.group(1)) % 2 else (w, h)
+        geom[n] = (h, w) if int(t) % 2 else (w, h)
 
     for n, (x, y) in plan(items, geom).items():
         text = rule_re(n).sub(lambda m: set_key(m.group(0), "position", f'"{x}x{y}"'), text, count=1)
@@ -103,7 +128,7 @@ def main(argv):
     subprocess.run(["hyprctl", "reload"], stdout=subprocess.DEVNULL, timeout=5)
 
 
-def _apply(line, kv, set_key):
+def _apply(line, kv):
     for k, v in kv.items():
         line = set_key(line, k, v)
     return line
