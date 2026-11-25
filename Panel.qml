@@ -26,8 +26,11 @@ Panel {
   property string targetMonitor: ""
   property var monitorInfo: ({})
   // Layout items in list order: ["DP-3", "eDP-2", "^HDMI-A-1"]; "^" = stacked above the one before.
+  // A mirror is enabled but sits on its source and isn't in `hyprctl monitors`, so it has no place to arrange.
+  function arranged(d) { return d && d.enabled && !d.mirror }
+  property int arrangedCount: 0
   function layoutItems(list) {
-    return list.filter(function(d) { return d && d.enabled }).map(function(d) { return (d.stacked ? "^" : "") + d.name })
+    return list.filter(arranged).map(function(d) { return (d.stacked ? "^" : "") + d.name })
   }
   function runAction(cmd) {
     // One action at a time: a click while one is still running is ignored, never retargeted.
@@ -41,7 +44,7 @@ Panel {
   }
   // Swap a display with its neighbour in the list (list order = screen order, top = left).
   function moveDisplay(name, delta) {
-    var list = displays.filter(function(d) { return d && d.enabled }).map(function(d) { return Object.assign({}, d) })
+    var list = displays.filter(arranged).map(function(d) { return Object.assign({}, d) })
     var i = list.findIndex(function(d) { return d.name === name }), j = i + delta
     if (i < 0 || j < 0 || j >= list.length) return
     var t = list[i]; list[i] = list[j]; list[j] = t
@@ -359,7 +362,11 @@ Panel {
       col.items.sort(function(a, b) { return box(b).y - box(a).y })
       col.items.forEach(function(d, i) { ordered.push(Object.assign({}, d, { stacked: i > 0 })) })
     })
-    root.displays = ordered.concat(parsed.displays.filter(function(d) { return !box(d) }))
+    // Enabled with no position means Hyprland left it out of `hyprctl monitors`: a mirror.
+    var rest = parsed.displays.filter(function(d) { return !box(d) })
+      .map(function(d) { return d.enabled ? Object.assign({}, d, { mirror: true }) : d })
+    root.displays = ordered.concat(rest)
+    root.arrangedCount = ordered.length
     root.enabledDisplayCount = parsed.enabledDisplayCount
   }
 
@@ -954,7 +961,7 @@ Panel {
 
     readonly property bool isFocused: display && display.focused
     readonly property bool canToggle: display && (!display.enabled || root.enabledDisplayCount > 1)
-    readonly property bool canMove: display && display.enabled && root.enabledDisplayCount > 1
+    readonly property bool canMove: root.arranged(display) && root.arrangedCount > 1
     readonly property real arrowsWidth: Style.space(104)
 
     hasCursor: root.cursorActive && root.focusSection === "monitors" && root.selectedIndex === rowIndex
@@ -990,7 +997,7 @@ Panel {
         textFormat: Text.PlainText
         text: monitorRow.display.focused
           ? Commons.I18n.t("monitor.displayFocused").arg(monitorRow.display.name)
-          : monitorRow.display.name
+          : monitorRow.display.name + (monitorRow.display.mirror ? " (mirror)" : "")
         color: root.bar.foreground
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.body
@@ -1047,7 +1054,7 @@ Panel {
           readonly property bool portrait: (root.monitorInfo[monitorRow.display.name] || {}).transform % 2 === 1
           readonly property bool usable: modelData.act === "left" || modelData.act === "stack"
             ? monitorRow.rowIndex > 0
-            : modelData.act === "right" ? monitorRow.rowIndex < root.enabledDisplayCount - 1 : true
+            : modelData.act === "right" ? monitorRow.rowIndex < root.arrangedCount - 1 : true
           // Toggles (stack, rotate) show their state: bright when on.
           readonly property bool on: modelData.act === "stack" ? !!monitorRow.display.stacked
             : modelData.act === "rotate" ? portrait : false
