@@ -109,5 +109,21 @@ def _apply(line, kv, set_key):
     return line
 
 
+def notify(msg):
+    # The panel ignores our exit code, so a failure would otherwise be a click that does nothing.
+    try:
+        subprocess.run(["notify-send", "-a", "Displays", "Displays: layout not saved", msg], timeout=5)
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    try:
+        main(sys.argv[1:])
+    except SystemExit as e:
+        if e.code not in (None, 0):
+            notify(str(e.code))
+        raise
+    except Exception as e:
+        notify(f"{type(e).__name__}: {e}")
+        raise

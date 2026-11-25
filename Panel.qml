@@ -380,7 +380,10 @@ Panel {
   function setScale(scale) {
     var name = targetName()
     if (!name) return
-    applyLayout(["--scale", name, effectiveScale(scale)], displays)
+    // effectiveScale is rounded for display ("1.33"); save Hyprland's exact multiple of 1/120
+    // (1.333333) or layout.py computes 1444px instead of 1440 and leaves a gap.
+    var units = Math.round(Number(effectiveScale(scale)) * 120)
+    applyLayout(["--scale", name, String(Math.round(units / 120 * 1e6) / 1e6)], displays)
   }
 
   // ---- Text size (shell base font + GTK text-scaling, via one CLI) ----
