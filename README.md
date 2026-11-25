@@ -74,6 +74,16 @@ your laptop, move it to just after the laptop with ↑ / ↓, then press ⤒.
 
 Check the maths with `./layout.py --self-test`.
 
+## Releases
+
+Each release is submitted to the
+[Omarchy plugin marketplace](https://github.com/omacom/omarchy-plugin-marketplace) for review.
+
+| Version | Commit | Submission | Status |
+| --- | --- | --- | --- |
+| 0.3.2 | `6f90582` | [#15923](https://github.com/omacom/omarchy-plugin-marketplace/issues/15923) | Under review |
+| 0.3.1 | `b2e57be` | [#14994](https://github.com/omacom/omarchy-plugin-marketplace/issues/14994) | Verified |
+
 ## License
 
 MIT. Includes code from Omarchy's `omarchy.monitor` panel, also MIT.
