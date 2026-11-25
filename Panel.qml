@@ -53,7 +53,8 @@ Panel {
   }
   function toggleRotation(name) {
     var info = monitorInfo[name] || {}
-    applyLayout(["--transform", name, info.transform % 2 ? "0" : "1"], displays)
+    // Flip only the 90° bit (0↔1, 2↔3, 4↔5, 6↔7) so an upside-down or mirrored monitor keeps that.
+    applyLayout(["--transform", name, String((info.transform | 0) ^ 1)], displays)
   }
   function targetName() {
     for (var i = 0; i < displays.length; i++)
