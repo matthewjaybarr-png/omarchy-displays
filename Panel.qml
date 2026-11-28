@@ -104,7 +104,16 @@ Panel {
   // make/model/serial so a name follows the screen when it moves to another port.
   property var aliases: ({})
   property bool editingAlias: false
-  function aliasKey(name) { return ((monitorInfo[name] || {}).description || "") || name }
+  // Keyed by the screen's description so a name follows it to another port. Two identical
+  // monitors (same make and model, no serial) share a description, so they add their port.
+  function aliasKey(name) {
+    var desc = (monitorInfo[name] || {}).description || ""
+    if (!desc) return name
+    for (var other in monitorInfo) {
+      if (other !== name && (monitorInfo[other] || {}).description === desc) return desc + " @ " + name
+    }
+    return desc
+  }
   function aliasFor(name) { var a = aliases[aliasKey(name)]; return typeof a === "string" ? a : "" }
   function labelFor(name) { return aliasFor(name) || name }
   function setAlias(name, text) {

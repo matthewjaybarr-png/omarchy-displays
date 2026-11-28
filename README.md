@@ -24,7 +24,7 @@ Built against Omarchy 4.5.0 (Hyprland 0.56.2, Quickshell 0.3.2). Forked from the
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/matthewjaybarr-png/omarchy-displays.git
+omarchy plugin add https://github.com/GrendelRTG/omarchy-displays.git
 omarchy plugin enable matthewjaybarr.displays
 omarchy bar put matthewjaybarr.displays --after omarchy.monitor
 omarchy plugin disable omarchy.monitor
