@@ -42,14 +42,47 @@ Panel {
     var script = decodeURIComponent(Qt.resolvedUrl("layout.py").toString().replace(/^file:\/\//, ""))
     runAction(["timeout", "-k", "1", "10", script].concat(flags, layoutItems(list)))
   }
-  // Swap a display with its neighbour in the list (list order = screen order, top = left).
+  // Move a display `delta` places along the list (list order = screen order, top = left).
+  // The arrows move one place; a drag moves as far as it was dropped.
   function moveDisplay(name, delta) {
     var list = displays.filter(arranged).map(function(d) { return Object.assign({}, d) })
     var i = list.findIndex(function(d) { return d.name === name }), j = i + delta
-    if (i < 0 || j < 0 || j >= list.length) return
-    var t = list[i]; list[i] = list[j]; list[j] = t
+    if (i < 0 || j < 0 || j >= list.length || j === i) return
+    list.splice(j, 0, list.splice(i, 1)[0])
     list[0].stacked = false
     applyLayout([], list)
+  }
+  // What a display copies when mirrored: the built-in screen, else the first one in the list.
+  function mirrorSource(name) {
+    var others = displays.filter(function(d) { return arranged(d) && d.name !== name }).map(function(d) { return d.name })
+    return others.indexOf(internalMonitor) >= 0 ? internalMonitor : (others[0] || "")
+  }
+  function toggleMirror(name) {
+    var d = displays.find(function(x) { return x && x.name === name })
+    if (!d) return
+    if (d.mirror) {
+      // Back to extended: it joins the end of the row.
+      applyLayout(["--mirror", name, "none"], displays.filter(arranged).concat([Object.assign({}, d, { stacked: false, mirror: false })]))
+    } else {
+      var src = mirrorSource(name)
+      if (!src) return
+      applyLayout(["--mirror", name, src], displays.filter(function(x) { return x.name !== name }))
+    }
+  }
+  readonly property var refreshValues: {
+    var m = monitorInfo[targetName()]
+    return m ? Model.refreshOptions(m.availableModes, m.width, m.height) : []
+  }
+  function activeRefreshIndex() {
+    var m = monitorInfo[targetName()]
+    if (!m) return -1
+    var now = Math.round(Number(m.refreshRate))
+    return refreshValues.findIndex(function(o) { return Number(o.label) === now })
+  }
+  function setRefresh(rate) {
+    var name = targetName(), m = monitorInfo[name]
+    if (!m) return
+    applyLayout(["--mode", name, m.width + "x" + m.height + "@" + rate], displays)
   }
   function toggleStacked(name) {
     applyLayout([], displays.map(function(d) { return d.name === name ? Object.assign({}, d, { stacked: !d.stacked }) : d }))
@@ -64,11 +97,38 @@ Panel {
       if (displays[i] && displays[i].enabled && displays[i].name === targetMonitor) return targetMonitor
     return focusedMonitor
   }
-  function cycleTarget() {
-    var enabled = displays.filter(function(d) { return d && d.enabled }).map(function(d) { return d.name })
-    if (enabled.length < 2) return
-    targetMonitor = enabled[(enabled.indexOf(targetName()) + 1) % enabled.length]
+  // The displays the switcher at the top offers, in list order.
+  readonly property var targetChoices: displays.filter(function(d) { return d && d.enabled }).map(function(d) { return d.name })
+
+  // Aliases live in ~/.config/omarchy/displays-aliases.json, keyed by the monitor's
+  // make/model/serial so a name follows the screen when it moves to another port.
+  property var aliases: ({})
+  property bool editingAlias: false
+  function aliasKey(name) { return ((monitorInfo[name] || {}).description || "") || name }
+  function aliasFor(name) { var a = aliases[aliasKey(name)]; return typeof a === "string" ? a : "" }
+  function labelFor(name) { return aliasFor(name) || name }
+  function setAlias(name, text) {
+    var next = Object.assign({}, aliases), key = aliasKey(name)
+    var clean = String(text || "").replace(/[\u0000-\u001f]/g, "").trim().slice(0, 40)
+    if (clean && clean !== name) next[key] = clean
+    else delete next[key]
+    aliases = next
+    aliasFile.setText(JSON.stringify(next, null, 2) + "\n")
   }
+  function loadAliases(raw) {
+    var parsed = {}
+    try { parsed = JSON.parse(raw || "{}") } catch (e) { parsed = {} }
+    var clean = {}
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+      for (var k in parsed)
+        if (typeof parsed[k] === "string" && k.length <= 200) clean[k] = parsed[k].slice(0, 40)
+    aliases = clean
+  }
+  function orientationText(t) {
+    t = t | 0
+    return (t % 2 ? "Portrait" : "Landscape") + ((t & 2) ? ", upside down" : "") + (t >= 4 ? ", flipped" : "")
+  }
+
   property bool internalEnabled: false
   property bool mirrorEnabled: false
   property string monitorScale: ""
@@ -122,9 +182,11 @@ Panel {
 
   readonly property var visibleSections: {
     var list = []
+    if (targetChoices.length > 1) list.push("target")
     if (brightnessAvailable) list.push("brightness")
     list.push("textsize")
     list.push("scale")
+    if (refreshValues.length) list.push("refresh")
     if (displays.length > 1) list.push("monitors")
     return list
   }
@@ -132,14 +194,16 @@ Panel {
   function sectionCount(section) {
     if (section === "brightness") return 0  // only the slider sentinel at -1
     if (section === "textsize") return 0    // slider sentinel at -1, like brightness
+    if (section === "target") return targetChoices.length
     if (section === "scale") return scaleValues.length
+    if (section === "refresh") return refreshValues.length
     if (section === "monitors") return displays.length
     return 0
   }
 
   function sectionIsSingleRow(section) {
     // brightness and text size are lone sliders; scale presets sit horizontally.
-    return section === "brightness" || section === "textsize" || section === "scale"
+    return section === "brightness" || section === "textsize" || section === "scale" || section === "refresh" || section === "target"
   }
 
   function sectionFirstIndex(section) {
@@ -181,10 +245,10 @@ Panel {
   // because adjustBrightness handles horizontal motion on the brightness
   // slider.
   function moveCursorH(delta) {
-    if (focusSection !== "scale") return
+    if (focusSection !== "scale" && focusSection !== "refresh" && focusSection !== "target") return
     var next = selectedIndex + delta
     if (next < 0) next = 0
-    if (next > scaleValues.length - 1) next = scaleValues.length - 1
+    if (next > sectionCount(focusSection) - 1) next = sectionCount(focusSection) - 1
     selectedIndex = next
   }
 
@@ -195,8 +259,16 @@ Panel {
   }
 
   function activateCursor() {
+    if (focusSection === "target" && selectedIndex >= 0 && selectedIndex < targetChoices.length) {
+      targetMonitor = targetChoices[selectedIndex]
+      return
+    }
     if (focusSection === "scale" && selectedIndex >= 0 && selectedIndex < scaleValues.length) {
       setScale(scaleValues[selectedIndex])
+      return
+    }
+    if (focusSection === "refresh" && selectedIndex >= 0 && selectedIndex < refreshValues.length) {
+      setRefresh(refreshValues[selectedIndex].rate)
       return
     }
     if (focusSection === "monitors" && selectedIndex >= 0 && selectedIndex < displays.length) {
@@ -346,7 +418,7 @@ Panel {
     var info = root.monitorInfo
     function box(d) {
       var m = info[d.name]
-      if (!d.enabled || !m) return null
+      if (!d.enabled || !m || m.disabled || (m.mirrorOf && m.mirrorOf !== "none")) return null
       var w = Math.round(m.width / m.scale), h = Math.round(m.height / m.scale)
       return m.transform % 2 ? { x: m.x, y: m.y, w: h, h: w } : { x: m.x, y: m.y, w: w, h: h }
     }
@@ -362,7 +434,7 @@ Panel {
       col.items.sort(function(a, b) { return box(b).y - box(a).y })
       col.items.forEach(function(d, i) { ordered.push(Object.assign({}, d, { stacked: i > 0 })) })
     })
-    // Enabled with no position means Hyprland left it out of `hyprctl monitors`: a mirror.
+    // Enabled with no box: a mirror, drawn on its source's screen.
     var rest = parsed.displays.filter(function(d) { return !box(d) })
       .map(function(d) { return d.enabled ? Object.assign({}, d, { mirror: true }) : d })
     root.displays = ordered.concat(rest)
@@ -441,6 +513,7 @@ Panel {
   // with j/k ready to navigate. Keep a default landing point, but don't paint
   // the cursor until hover or the first navigation key.
   onOpenedChanged: {
+    if (!opened) editingAlias = false
     if (opened) {
       refresh()
       if (brightnessAvailable) {
@@ -469,11 +542,24 @@ Panel {
     onTriggered: root.refresh()
   }
 
+  // Our own strings: Omarchy renamed its monitor.* keys once already.
+  Commons.Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
+
+  FileView {
+    id: aliasFile
+    path: Quickshell.env("HOME") + "/.config/omarchy/displays-aliases.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.loadAliases(text())
+    onLoadFailed: root.loadAliases("")
+  }
+
   Process {
     id: stateProc
     // Bounded and all-or-nothing: on any failure or timeout it prints nothing and the panel
     // keeps its previous state.
-    command: ["bash", "-c", "set -o pipefail; s=$(timeout -k 1 5 omarchy-monitor-state) && j=$(timeout -k 1 5 hyprctl monitors -j | jq -c 'map({key: .name, value: {scale, x, y, width, height, transform}}) | from_entries') && printf '%s\\n%s\\n' \"$s\" \"$j\" | head -c 65536"]
+    command: ["bash", "-c", "set -o pipefail; s=$(timeout -k 1 5 omarchy-monitor-state) && j=$(timeout -k 1 5 hyprctl monitors all -j | jq -c 'map({key: .name, value: {scale, x, y, width, height, transform, refreshRate, availableModes, description, mirrorOf, disabled}}) | from_entries') && printf '%s\\n%s\\n' \"$s\" \"$j\" | head -c 65536"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -586,13 +672,14 @@ Panel {
       property alias scrollArea: scrollArea
       implicitHeight: panelColumn.implicitHeight
       anchors.fill: parent
+      blocked: root.editingAlias
       onMoveRequested: function(dx, dy) {
         if (!root.cursorActive) { root.cursorActive = true; return }
         if (dy !== 0) root.moveCursor(dy)
         else if (dx !== 0) {
           if (root.focusSection === "brightness") root.adjustBrightness(dx * 5)
           else if (root.focusSection === "textsize") root.adjustTextSize(dx)
-          else if (root.focusSection === "scale") root.moveCursorH(dx)
+          else root.moveCursorH(dx)
         }
       }
       onActivateRequested: if (root.cursorActive) root.activateCursor()
@@ -658,7 +745,7 @@ Panel {
                   if (root.brightnessAvailable) {
                     return root.brightnessName(brightnessSlider.dragging ? brightnessSlider.liveValue : root.brightnessPercent).toUpperCase()
                   }
-                  return Commons.I18n.t("monitor.fixedBrightness")
+                  return strings.t("fixedBrightness")
                 }
                 color: Qt.darker(root.bar.foreground, 1.4)
                 font.family: root.bar.fontFamily
@@ -667,6 +754,161 @@ Panel {
                 font.letterSpacing: 1.2
                 elide: Text.ElideRight
                 width: parent.width
+              }
+            }
+          }
+
+          // ---------- The monitor the settings below act on ----------
+          PanelSeparator {
+            visible: root.targetName() !== ""
+            foreground: root.bar.foreground
+          }
+
+          Column {
+            id: targetCard
+            visible: root.targetName() !== ""
+            width: parent.width
+            spacing: Style.space(8)
+
+            readonly property string name: root.targetName()
+            readonly property var info: root.monitorInfo[name] || {}
+
+            Row {
+              id: targetRow
+              visible: root.targetChoices.length > 1
+              width: parent.width
+              spacing: Style.spacing.xs
+              readonly property real cellWidth: (width - spacing * (root.targetChoices.length - 1)) / Math.max(1, root.targetChoices.length)
+
+              Repeater {
+                model: root.targetChoices
+
+                ChoicePill {
+                  required property string modelData
+                  required property int index
+
+                  section: "target"
+                  choiceIndex: index
+                  text: root.labelFor(modelData)
+                  active: modelData === targetCard.name
+                  width: targetRow.cellWidth
+                  onClicked: root.targetMonitor = modelData
+                }
+              }
+            }
+
+            // Name (click the pencil to give it an alias) and connector.
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(aliasTitle.implicitHeight, aliasField.implicitHeight)
+
+              Text {
+                id: aliasTitle
+                visible: !root.editingAlias
+                textFormat: Text.PlainText
+                text: root.labelFor(targetCard.name)
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+                elide: Text.ElideRight
+                width: Math.min(implicitWidth, parent.width - aliasEdit.width - connectorText.implicitWidth - Style.space(16))
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(6)
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Text {
+                id: aliasEdit
+                visible: !root.editingAlias
+                textFormat: Text.PlainText
+                text: "󰏫"
+                color: root.bar.foreground
+                opacity: aliasEditArea.containsMouse ? 1.0 : 0.5
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.body
+                anchors.left: aliasTitle.right
+                anchors.leftMargin: Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
+                Accessible.name: "Rename"
+                MouseArea {
+                  id: aliasEditArea
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    root.editingAlias = true
+                    aliasField.text = root.aliasFor(targetCard.name)
+                    Qt.callLater(function() { aliasField.selectAll(); aliasField.forceActiveFocus() })
+                  }
+                }
+              }
+
+              TextField {
+                id: aliasField
+                visible: root.editingAlias
+                width: parent.width - connectorText.implicitWidth - Style.space(16)
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                placeholderText: targetCard.name
+                maximumLength: 40
+                foreground: root.bar.foreground
+                font.family: root.bar.fontFamily
+                function finish(save) {
+                  if (save) root.setAlias(targetCard.name, text)
+                  root.editingAlias = false
+                  Qt.callLater(function() { if (panel.loadedContent) panel.loadedContent.forceActiveFocus() })
+                }
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Escape) { finish(false); event.accepted = true }
+                  else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { finish(true); event.accepted = true }
+                }
+              }
+
+              Text {
+                id: connectorText
+                textFormat: Text.PlainText
+                // The connector only when an alias hides it; the title already says it otherwise.
+                text: [root.aliasFor(targetCard.name) ? targetCard.name : "", targetCard.name === root.internalMonitor ? "built-in" : ""].filter(Boolean).join(" · ")
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(6)
+                anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            Repeater {
+              // Each line only when hyprctl reported what it needs.
+              model: {
+                var m = targetCard.info, lines = []
+                if (m.description) lines.push(m.description)
+                if (m.width) {
+                  var s = Number(m.scale) || 1
+                  var w = Math.round(m.width / s), h = Math.round(m.height / s)
+                  if (m.transform % 2) { var t = w; w = h; h = t }
+                  lines.push(m.width + "×" + m.height + " @ " + Commons.I18n.formatNumber(Math.round(Number(m.refreshRate))) + " Hz · "
+                             + Commons.I18n.formatNumber(root.normalizeScale(s)) + "x, looks like " + w + "×" + h)
+                  lines.push(root.orientationText(m.transform) + " · "
+                             + (m.mirrorOf && m.mirrorOf !== "none" ? "mirroring " + root.labelFor(m.mirrorOf) : "at " + m.x + ", " + m.y)
+                             + (targetCard.name === root.focusedMonitor ? " · focused" : ""))
+                }
+                return lines
+              }
+
+              Text {
+                required property string modelData
+                textFormat: Text.PlainText
+                text: modelData
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+                width: parent.width - Style.space(12)
+                x: Style.space(6)
               }
             }
           }
@@ -845,7 +1087,7 @@ Panel {
               Text {
                 id: scaleMonitor
                 textFormat: Text.PlainText
-                text: root.targetName() + "  ⇄"
+                text: root.labelFor(root.targetName())
                 // Only worth naming when more than one display is in play.
                 visible: root.targetName() !== "" && root.enabledDisplayCount > 1
                 color: Qt.darker(root.bar.foreground, 1.4)
@@ -855,12 +1097,6 @@ Panel {
                 anchors.right: parent.right
                 anchors.rightMargin: Style.space(6)
                 anchors.verticalCenter: parent.verticalCenter
-                MouseArea {
-                  anchors.fill: parent
-                  anchors.margins: -Style.space(4)
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.cycleTarget()
-                }
               }
             }
 
@@ -877,13 +1113,57 @@ Panel {
               Repeater {
                 model: root.scaleValues
 
-                ScalePill {
+                ChoicePill {
                   required property string modelData
                   required property int index
 
-                  scaleValue: modelData
-                  scaleIndex: index
+                  section: "scale"
+                  choiceIndex: index
+                  text: Commons.I18n.formatNumber(root.effectiveScale(modelData)) + "x"
+                  active: root.activeScaleIndex() === index
                   width: scaleRow.cellWidth
+                  onClicked: root.setScale(modelData)
+                }
+              }
+            }
+          }
+
+          // ---------- Refresh rate ----------
+          PanelSeparator {
+            visible: root.refreshValues.length > 0
+            foreground: root.bar.foreground
+          }
+
+          Column {
+            visible: root.refreshValues.length > 0
+            width: parent.width
+            spacing: Style.space(10)
+
+            PanelSectionHeader {
+              text: Commons.I18n.t("monitor.refreshRate")
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+            }
+
+            Row {
+              id: refreshRow
+              width: parent.width
+              spacing: Style.spacing.xs
+              readonly property real cellWidth: (width - spacing * (root.refreshValues.length - 1)) / Math.max(1, root.refreshValues.length)
+
+              Repeater {
+                model: root.refreshValues
+
+                ChoicePill {
+                  required property var modelData
+                  required property int index
+
+                  section: "refresh"
+                  choiceIndex: index
+                  text: Commons.I18n.formatNumber(Number(modelData.label)) + " Hz"
+                  active: root.activeRefreshIndex() === index
+                  width: refreshRow.cellWidth
+                  onClicked: root.setRefresh(modelData.rate)
                 }
               }
             }
@@ -901,7 +1181,7 @@ Panel {
             visible: root.displays.length > 1
 
             PanelSectionHeader {
-              text: Commons.I18n.t("monitor.displays")
+              text: strings.t("displays")
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
             }
@@ -929,12 +1209,12 @@ Panel {
     }
   }
 
-  component ScalePill: Button {
+  // One choice in a row of buttons (monitor, scale, refresh rate), sharing the keyboard cursor.
+  component ChoicePill: Button {
     id: pill
-    required property string scaleValue
-    required property int scaleIndex
+    required property string section
+    required property int choiceIndex
 
-    text: Commons.I18n.formatNumber(root.effectiveScale(scaleValue)) + "x"
     fontSize: Style.font.caption
     foreground: root.bar.foreground
     fontFamily: root.bar.fontFamily
@@ -942,15 +1222,12 @@ Panel {
     verticalPadding: Style.spacing.controlPaddingY
     bordered: true
 
-    active: root.activeScaleIndex() === scaleIndex
-    hasCursor: root.cursorActive && root.focusSection === "scale" && root.selectedIndex === scaleIndex
-
-    onClicked: root.setScale(scaleValue)
+    hasCursor: root.cursorActive && root.focusSection === section && root.selectedIndex === choiceIndex
     onHovered: function(isHovered) {
       if (!isHovered || root.reflowingText) return
       root.cursorActive = true
-      root.focusSection = "scale"
-      root.selectedIndex = pill.scaleIndex
+      root.focusSection = pill.section
+      root.selectedIndex = pill.choiceIndex
     }
   }
 
@@ -962,7 +1239,12 @@ Panel {
     readonly property bool isFocused: display && display.focused
     readonly property bool canToggle: display && (!display.enabled || root.enabledDisplayCount > 1)
     readonly property bool canMove: root.arranged(display) && root.arrangedCount > 1
-    readonly property real arrowsWidth: Style.space(104)
+    readonly property real arrowsWidth: Style.space(130)
+    // Rows of arranged displays come first, so a row's index is its place in the layout.
+    property real dragOffset: 0
+    readonly property real rowStep: height + Style.space(10)
+    z: dragOffset !== 0 ? 1 : 0
+    transform: Translate { y: monitorRow.dragOffset }
 
     hasCursor: root.cursorActive && root.focusSection === "monitors" && root.selectedIndex === rowIndex
     onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(monitorRow)
@@ -996,8 +1278,8 @@ Panel {
       Text {
         textFormat: Text.PlainText
         text: monitorRow.display.focused
-          ? Commons.I18n.t("monitor.displayFocused").arg(monitorRow.display.name)
-          : monitorRow.display.name + (monitorRow.display.mirror ? " (mirror)" : "")
+          ? strings.t("displayFocused").arg(root.labelFor(monitorRow.display.name))
+          : monitorRow.display.mirror ? strings.t("mirror").arg(root.labelFor(monitorRow.display.name)) : root.labelFor(monitorRow.display.name)
         color: root.bar.foreground
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.body
@@ -1021,20 +1303,41 @@ Panel {
       }
     }
 
+    // Click toggles the display; press and drag up or down moves it along the layout.
     MouseArea {
       anchors.fill: parent
       hoverEnabled: true
-      cursorShape: monitorRow.canToggle ? Qt.PointingHandCursor : Qt.ArrowCursor
+      preventStealing: true
+      property real pressY: 0
+      property bool dragged: false
+      cursorShape: dragged ? Qt.ClosedHandCursor : monitorRow.canToggle ? Qt.PointingHandCursor : Qt.ArrowCursor
       onContainsMouseChanged: if (containsMouse && !root.reflowingText) {
         root.cursorActive = true
         root.focusSection = "monitors"
         root.selectedIndex = monitorRow.rowIndex
       }
-      onClicked: if (monitorRow.canToggle) root.toggleDisplay(monitorRow.display.name, monitorRow.display.enabled)
+      onPressed: function(mouse) { pressY = mouse.y; dragged = false }
+      onPositionChanged: function(mouse) {
+        if (!pressed || !monitorRow.canMove) return
+        var dy = mouse.y - pressY
+        if (!dragged && Math.abs(dy) < Style.space(6)) return
+        dragged = true
+        // Stay within the arranged rows.
+        var lo = -monitorRow.rowIndex * monitorRow.rowStep, hi = (root.arrangedCount - 1 - monitorRow.rowIndex) * monitorRow.rowStep
+        monitorRow.dragOffset = Math.max(lo, Math.min(hi, dy))
+      }
+      onReleased: {
+        if (!dragged) return
+        var k = Math.round(monitorRow.dragOffset / monitorRow.rowStep)
+        monitorRow.dragOffset = 0
+        if (k !== 0) root.moveDisplay(monitorRow.display.name, k)
+      }
+      onCanceled: { monitorRow.dragOffset = 0; dragged = false }
+      onClicked: if (!dragged && monitorRow.canToggle) root.toggleDisplay(monitorRow.display.name, monitorRow.display.enabled)
     }
 
     Row {
-      visible: monitorRow.canMove
+      visible: monitorRow.canMove || !!monitorRow.display.mirror
       anchors.right: parent.right
       anchors.rightMargin: Style.space(6) + Style.space(14) + Style.space(8)
       anchors.verticalCenter: parent.verticalCenter
@@ -1045,19 +1348,23 @@ Panel {
           { glyph: "󰁝", act: "left", tip: "Move left" },
           { glyph: "󰁅", act: "right", tip: "Move right" },
           { glyph: "⤒", act: "stack", tip: "Stack above the display before it" },
-          { glyph: "rotate", act: "rotate", tip: "Portrait / landscape" }
+          { glyph: "rotate", act: "rotate", tip: "Portrait / landscape" },
+          { glyph: "⧉", act: "mirror", tip: "Mirror / extend" }
         ]
 
         Text {
           required property var modelData
           required property int index
           readonly property bool portrait: (root.monitorInfo[monitorRow.display.name] || {}).transform % 2 === 1
-          readonly property bool usable: modelData.act === "left" || modelData.act === "stack"
-            ? monitorRow.rowIndex > 0
+          // A mirror can only be extended again; mirroring needs another display to copy.
+          readonly property bool usable: modelData.act === "mirror" ? !!monitorRow.display.mirror || monitorRow.canMove
+            : !monitorRow.canMove ? false
+            : modelData.act === "left" || modelData.act === "stack" ? monitorRow.rowIndex > 0
             : modelData.act === "right" ? monitorRow.rowIndex < root.arrangedCount - 1 : true
           // Toggles (stack, rotate) show their state: bright when on.
           readonly property bool on: modelData.act === "stack" ? !!monitorRow.display.stacked
-            : modelData.act === "rotate" ? portrait : false
+            : modelData.act === "rotate" ? portrait
+            : modelData.act === "mirror" ? !!monitorRow.display.mirror : false
           textFormat: Text.PlainText
           text: modelData.act === "rotate" ? (portrait ? "▯" : "▭") : modelData.glyph
           color: root.bar.foreground
@@ -1065,7 +1372,7 @@ Panel {
           font.bold: on
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.subtitle
-          width: monitorRow.arrowsWidth / 4
+          width: monitorRow.arrowsWidth / 5
           horizontalAlignment: Text.AlignHCenter
           Accessible.name: modelData.tip
 
@@ -1081,7 +1388,8 @@ Panel {
               if (act === "left") root.moveDisplay(n, -1)
               else if (act === "right") root.moveDisplay(n, 1)
               else if (act === "stack") root.toggleStacked(n)
-              else root.toggleRotation(n)
+              else if (act === "rotate") root.toggleRotation(n)
+              else root.toggleMirror(n)
             }
           }
         }

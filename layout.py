@@ -9,6 +9,17 @@ scratch so nothing overlaps or gaps. Run with --self-test to check the maths.
 import json, os, re, shutil, subprocess, sys, tempfile
 
 NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+MODE = re.compile(r"^([0-9]+)x([0-9]+)@([0-9]+(\.[0-9]+)?)$")
+
+
+def advertised(mode, modes):
+    """'2560x1600@240' -> True if a mode in hyprctl's availableModes matches it."""
+    w, h, rate = MODE.match(mode).group(1, 2, 3)
+    for m in modes:
+        a = MODE.match(m.removesuffix("Hz"))
+        if a and a.group(1, 2) == (w, h) and abs(float(a.group(3)) - float(rate)) < 0.01:
+            return True
+    return False
 
 
 def rule_re(name):
@@ -67,6 +78,13 @@ def self_test():
     assert num(line, "scale") is None
     assert set_key(set_key(line, "scale", "1.5"), "scale", "2") == "  hl.monitor({output='DP-1',mode=\"preferred\", scale = 2 }) -- desk"
     assert "})" not in rule_re("DP-3").search(text).group(0)  # multi-line: refused in main
+    modes = ["2560x1600@240.00Hz", "2560x1600@60.00Hz", "1920x1080@59.94Hz"]
+    assert advertised("2560x1600@240", modes) and advertised("1920x1080@59.94", modes)
+    assert not advertised("2560x1600@144", modes) and not advertised("1920x1080@60", modes)
+    assert set_key(line, "mode", '"2560x1600@240"').count("mode = \"2560x1600@240\"") == 1
+    m = _apply(line, {"mirror": '"eDP-2"'})
+    assert 'mirror = "eDP-2"' in m and "mirror" not in _apply(m, {"mirror": "none"})
+    assert drop_key(line, "mirror") == line
     print("self-test ok")
 
 
@@ -74,19 +92,38 @@ def main(argv):
     if argv == ["--self-test"]:
         return self_test()
     edits = {}
-    while argv and argv[0] in ("--scale", "--transform"):
+    while argv and argv[0] in ("--scale", "--transform", "--mode", "--mirror"):
         flag, out, val = argv[:3]
         argv = argv[3:]
-        if not NAME.match(out) or not re.match(r"^[0-9]+(\.[0-9]+)?$", val):
+        if flag == "--mode":
+            ok = MODE.match(val)
+        elif flag == "--mirror":  # --mirror OUT SRC copies SRC's picture; --mirror OUT none extends again
+            ok = NAME.match(val) and val != out
+        else:
+            ok = re.match(r"^[0-9]+(\.[0-9]+)?$", val)
+        if not NAME.match(out) or not ok:
             sys.exit(f"bad {flag} {out} {val}")
-        edits.setdefault(out, {})["scale" if flag == "--scale" else "transform"] = val
+        quoted = flag in ("--mode", "--mirror") and val != "none"
+        edits.setdefault(out, {})[flag[2:]] = f'"{val}"' if quoted else val
     items = [(a.lstrip("^"), a.startswith("^")) for a in argv]
     if not items or any(not NAME.match(n) for n, _ in items):
         sys.exit("need valid connector names")
 
     lua = os.path.realpath(os.path.expanduser("~/.config/hypr/monitors.lua"))
     text = open(lua).read()
-    live = {m["name"]: m for m in json.loads(subprocess.check_output(["hyprctl", "monitors", "-j"], timeout=5))}
+    # "all" also lists mirrors, which plain `monitors` leaves out; disabled ones are skipped.
+    live = {m["name"]: m for m in json.loads(subprocess.check_output(["hyprctl", "monitors", "all", "-j"], timeout=5))
+            if not m.get("disabled")}
+    for n, kv in edits.items():
+        src = kv.get("mirror", "none").strip('"')
+        if src != "none" and (src not in live or live[src].get("mirrorOf", "none") != "none"):
+            sys.exit(f"can't mirror {n} onto {src}: it isn't an extended display")
+    for n, kv in edits.items():
+        mode = kv.get("mode", "").strip('"')
+        # Only the refresh rate changes: the positions below come from the live resolution.
+        if mode and (n not in live or not mode.startswith(f'{live[n]["width"]}x{live[n]["height"]}@')
+                     or not advertised(mode, live[n].get("availableModes", []))):
+            sys.exit(f"{n} does not offer {mode}")
     # A stock monitors.lua only has the catch-all rule: give each monitor we touch its own line.
     for n in sorted({n for n, _ in items} | set(edits)):
         if rule_re(n).search(text):
@@ -128,9 +165,13 @@ def main(argv):
     subprocess.run(["hyprctl", "reload"], stdout=subprocess.DEVNULL, timeout=5)
 
 
+def drop_key(line, key):
+    return re.sub(rf"""[ \t]*,[ \t]*\b{key}[ \t]*=[ \t]*("[^"]*"|'[^']*'|[^,}}\s]+)""", "", line, count=1)
+
+
 def _apply(line, kv):
     for k, v in kv.items():
-        line = set_key(line, k, v)
+        line = drop_key(line, k) if v == "none" else set_key(line, k, v)
     return line
 
 

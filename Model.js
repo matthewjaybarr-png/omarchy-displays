@@ -114,8 +114,31 @@ function parseDisplays(raw) {
   }
 }
 
+// From Omarchy's monitor panel: the refresh rates offered at the current
+// resolution, one per whole rate (59.94 and 60 are the same choice), from 60Hz
+// up. Empty unless one beats 60Hz, since then there's nothing to choose.
+function refreshOptions(availableModes, width, height) {
+  if (!Array.isArray(availableModes)) return []
+  var prefix = Number(width) + "x" + Number(height) + "@"
+  var rates = {}
+  for (var i = 0; i < availableModes.length; i++) {
+    var mode = String(availableModes[i])
+    if (mode.indexOf(prefix) !== 0) continue
+    var rate = parseFloat(mode.slice(prefix.length))
+    if (!(rate >= 59.5)) continue
+    var whole = Math.round(rate)
+    if (!rates[whole] || rate > rates[whole]) rates[whole] = rate
+  }
+  var wholes = Object.keys(rates).map(Number).sort(function(a, b) { return a - b })
+  if (wholes.length < 2 || wholes[wholes.length - 1] <= 60) return []
+  return wholes.map(function(whole) {
+    return { label: String(whole), rate: String(Number(rates[whole].toFixed(2))) }
+  })
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
+    refreshOptions: refreshOptions,
     clampBrightness: clampBrightness,
     normalizeScale: normalizeScale,
     cleanScale: cleanScale,

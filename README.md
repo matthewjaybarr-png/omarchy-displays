@@ -42,8 +42,19 @@ To go back: `omarchy plugin enable omarchy.monitor` and
 
 Click the monitor icon on the bar.
 
-**Scale.** The name next to **SCALE** is the monitor the buttons change. Click it (⇄) to
-step through your monitors, then pick a scale. There's a 1.33× button for 1080p screens.
+**Pick a monitor.** With more than one monitor, a row of buttons at the top picks the
+one the panel works on. Below it is everything about that monitor: its make and model,
+resolution, refresh rate, scale, the size it looks like, orientation and position, and
+whether it's mirroring another or has your mouse focus.
+
+**Name it.** Click the pencil next to the name to give the monitor your own name ("Left
+desk"), Enter to save, Esc to cancel, empty to go back to the port name. Names are tied to
+the screen itself, not the port, so they follow it if you plug it in elsewhere. They're
+kept in `~/.config/omarchy/displays-aliases.json`.
+
+**Scale** and **Refresh rate** change the picked monitor. There's a 1.33× button for
+1080p screens. Refresh rate only shows when the monitor offers more than 60 Hz at its
+current resolution.
 
 **Displays list.** The list is in screen order: the top row is the leftmost monitor. Each
 row has:
@@ -53,7 +64,10 @@ row has:
 | ↑ / ↓ | move the monitor one place left / right |
 | ⤒ | stack it above the monitor listed before it; bright when on, click again to undo |
 | ▭ / ▯ | landscape / portrait; shows which it is now |
+| ⧉ | mirror: show the built-in screen's picture (or the first monitor's) on this one; click again to extend |
 | click the name | turn the monitor on or off, same as stock |
+
+You can also drag a row up or down to move it.
 
 A stacked monitor sits centred above the one before it in the list. To put a monitor above
 your laptop, move it to just after the laptop with ↑ / ↓, then press ⤒.
